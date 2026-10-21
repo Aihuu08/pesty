@@ -15,7 +15,10 @@ import Foundation
 /// cannot be parsed; callers then fall back to RTF or plain text.
 enum HTMLSanitizer {
     static func sanitized(_ html: Data) -> Data? {
-        guard let document = try? XMLDocument(data: withoutPrologue(html),
+        // Parsed from a String we decoded, not from bytes: given bytes, the
+        // tidy parser read UTF-8 as Latin-1 and turned Chinese into mojibake.
+        guard let text = decoded(html),
+              let document = try? XMLDocument(xmlString: withoutPrologue(text),
                                               options: [.documentTidyHTML, .nodeLoadExternalEntitiesNever]),
               let root = document.rootElement() else { return nil }
         document.dtd = nil
@@ -27,17 +30,24 @@ enum HTMLSanitizer {
         return Data(("<html><head><meta charset=\"utf-8\"></head><body>" + markup + "</body></html>").utf8)
     }
 
+    /// Pasteboard HTML is UTF-8 in practice; UTF-16 (with a byte order mark)
+    /// also turns up. Anything else is not worth guessing at.
+    private static func decoded(_ html: Data) -> String? {
+        if html.starts(with: [0xFF, 0xFE]) || html.starts(with: [0xFE, 0xFF]) {
+            return String(data: html, encoding: .utf16)
+        }
+        return String(data: html, encoding: .utf8)
+    }
+
     /// A doctype naming an external DTD, XML declarations and comments carry
     /// no formatting and can make the tidy parser give up; drop them first.
-    private static func withoutPrologue(_ html: Data) -> Data {
-        guard var text = String(data: html, encoding: .utf8) ?? String(data: html, encoding: .utf16) else {
-            return html
-        }
+    private static func withoutPrologue(_ html: String) -> String {
+        var text = html
         for pattern in ["<!DOCTYPE[^>]*>", "<\\?xml[^>]*\\?>", "<!--[\\s\\S]*?-->"] {
             text = text.replacingOccurrences(of: pattern, with: "",
                                              options: [.regularExpression, .caseInsensitive])
         }
-        return Data(text.utf8)
+        return text
     }
 
     /// Removed together with everything inside them.
