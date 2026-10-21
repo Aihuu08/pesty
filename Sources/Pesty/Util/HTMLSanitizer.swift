@@ -15,7 +15,7 @@ import Foundation
 /// cannot be parsed; callers then fall back to RTF or plain text.
 enum HTMLSanitizer {
     static func sanitized(_ html: Data) -> Data? {
-        guard let document = try? XMLDocument(data: html,
+        guard let document = try? XMLDocument(data: withoutPrologue(html),
                                               options: [.documentTidyHTML, .nodeLoadExternalEntitiesNever]),
               let root = document.rootElement() else { return nil }
         document.dtd = nil
@@ -24,6 +24,19 @@ enum HTMLSanitizer {
         let body = root.elements(forName: "body").first ?? root
         let markup = (body.children ?? []).map { $0.xmlString }.joined()
         return Data(("<html><body>" + markup + "</body></html>").utf8)
+    }
+
+    /// A doctype naming an external DTD, XML declarations and comments carry
+    /// no formatting and can make the tidy parser give up; drop them first.
+    private static func withoutPrologue(_ html: Data) -> Data {
+        guard var text = String(data: html, encoding: .utf8) ?? String(data: html, encoding: .utf16) else {
+            return html
+        }
+        for pattern in ["<!DOCTYPE[^>]*>", "<\\?xml[^>]*\\?>", "<!--[\\s\\S]*?-->"] {
+            text = text.replacingOccurrences(of: pattern, with: "",
+                                             options: [.regularExpression, .caseInsensitive])
+        }
+        return Data(text.utf8)
     }
 
     /// Removed together with everything inside them.

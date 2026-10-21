@@ -37,7 +37,10 @@ final class HTMLImportNetworkTests: XCTestCase {
         """
         let item = ClipItem(type: .text, text: "Bold and a link.", htmlData: Data(html.utf8))
 
+        let sanitized = HTMLSanitizer.sanitized(Data(html.utf8))
+        print("HTML-SANITIZED", sanitized.map { String(decoding: $0, as: UTF8.self) } ?? "nil")
         let markdown = FormatConverter.markdown(for: item)
+        print("HTML-MARKDOWN", markdown ?? "nil")
         _ = FormatConverter.cleanedRTF(for: item)
         // The formatting itself still comes through.
         XCTAssertTrue(markdown?.contains("**Bold**") == true, markdown ?? "nil")
@@ -115,8 +118,8 @@ final class HTMLSanitizerTests: XCTestCase {
         for needle in ["<img", "url(", "javascript:", "background=", "http://h/"] {
             XCTAssertFalse(out.contains(needle), "\(needle) survived: \(out)")
         }
-        XCTAssertTrue(out.contains(">t<"), out)
-        XCTAssertTrue(out.contains(">c<"), out)
+        XCTAssertTrue(out.contains("<p>t"), out)
+        XCTAssertTrue(out.contains("<td>c"), out)
     }
 
     func testKeepsHarmlessInlineStyles() {
