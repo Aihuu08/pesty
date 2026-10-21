@@ -19,7 +19,10 @@ enum ClipDragProvider {
                 registerText(item.text ?? item.displayTitle, on: provider)
             }
         case .link:
-            if let text = item.text, let url = URL(string: text) {
+            // Captured links are always http(s); don't hand a drop target a
+            // URL with any other scheme that arrived through a synced store.
+            if let text = item.text, let url = URL(string: text),
+               let scheme = url.scheme?.lowercased(), ["http", "https"].contains(scheme) {
                 provider.registerObject(url as NSURL, visibility: .all)
             }
             registerText(item.text ?? "", on: provider)

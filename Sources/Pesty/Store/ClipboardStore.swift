@@ -59,7 +59,7 @@ final class ClipboardStore {
     private var baseDir: URL
     private var saveWorkItem: DispatchWorkItem?
 
-    private var fileWatch: DispatchSourceFileSystemObject?
+    private var fileWatcher: FileChangeWatcher?
     private var ignoreWatchUntil: Date = .distantPast
 
     /// Normalized search text per clip, built off the main thread after
@@ -149,10 +149,11 @@ final class ClipboardStore {
                 if Task.isCancelled { return }
                 built.append((id, CachedSearchIndex(signature: signature, index: SearchIndex(text: text))))
             }
+            let finished = built
             await MainActor.run { [weak self] in
                 guard let self else { return }
                 // A lookup may have indexed a clip meanwhile; keep the newer entry.
-                for (id, entry) in built where self.searchIndexes[id] == nil {
+                for (id, entry) in finished where self.searchIndexes[id] == nil {
                     self.searchIndexes[id] = entry
                 }
             }
@@ -654,7 +655,7 @@ final class ClipboardStore {
 
     func imageURL(for item: ClipItem) -> URL? {
         guard let name = item.imageFileName else { return nil }
-        return imagesDir.appendingPathComponent(name)
+        return StoredFileName.url(for: name, in: imagesDir)
     }
 
     func loadImage(for item: ClipItem) -> NSImage? {
@@ -696,14 +697,49 @@ final class ClipboardStore {
     private struct Snapshot: Codable {
         var history: [ClipItem]
         var pinboards: [Pinboard]
+
+        /// The snapshot with every image file name that is not a plain name
+        /// dropped; see StoredFileName.
+        func sanitized() -> Snapshot {
+            var copy = self
+            copy.history = history.map { $0.withSafeImageFileName() }
+            for i in copy.pinboards.indices {
+                copy.pinboards[i].items = copy.pinboards[i].items.map { $0.withSafeImageFileName() }
+            }
+            return copy
+        }
+    }
+
+    private static func readSnapshot(at url: URL) throws -> Snapshot {
+        try JSONDecoder().decode(Snapshot.self, from: Data(contentsOf: url)).sanitized()
     }
 
     private func load() {
-        guard let data = try? Data(contentsOf: storeURL),
-              let snap = try? JSONDecoder().decode(Snapshot.self, from: data) else { return }
-        history = snap.history
-        pinboards = snap.pinboards
-        selectFirst()
+        guard FileManager.default.fileExists(atPath: storeURL.path) else { return }
+        do {
+            let snap = try Self.readSnapshot(at: storeURL)
+            history = snap.history
+            pinboards = snap.pinboards
+            selectFirst()
+        } catch {
+            // Starting empty would let the next save overwrite the only copy
+            // of the history, so move the unreadable file out of the way first.
+            setAsideUnreadableStore(at: storeURL)
+        }
+    }
+
+    private func setAsideUnreadableStore(at url: URL) {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyyMMdd-HHmmss"
+        let kept = url.deletingLastPathComponent()
+            .appendingPathComponent("store.json.unreadable-\(formatter.string(from: Date()))")
+        do {
+            try FileManager.default.moveItem(at: url, to: kept)
+            NSLog("Pesty: store.json could not be read and was kept as %@", kept.lastPathComponent)
+        } catch {
+            NSLog("Pesty: store.json could not be read or set aside: %@", error.localizedDescription)
+        }
     }
 
     private func scheduleSave() {
@@ -737,8 +773,8 @@ final class ClipboardStore {
             // here and land in history anyway. A privacy filter that leaks across
             // devices is not a privacy filter.
             guard !Settings.shared.isIgnoringSourceApp(item.sourceBundleID) else { continue }
-            if let src = entry.imageSourceURL, let name = item.imageFileName {
-                let dst = imagesDir.appendingPathComponent(name)
+            if let src = entry.imageSourceURL, let name = item.imageFileName,
+               let dst = StoredFileName.url(for: name, in: imagesDir) {
                 try? FileManager.default.removeItem(at: dst)
                 try? FileManager.default.copyItem(at: src, to: dst)
                 try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: dst.path)
@@ -853,12 +889,12 @@ final class ClipboardStore {
                                 attributes: [.posixPermissions: 0o700])
 
         if fm.fileExists(atPath: newStore.path),
-           let data = try? Data(contentsOf: newStore),
-           let snap = try? JSONDecoder().decode(Snapshot.self, from: data) {
+           let snap = try? Self.readSnapshot(at: newStore) {
             copyImages(from: imagesDir, to: newImages)
             baseDir = target; imagesDir = newImages; storeURL = newStore
             mergeExternal(snap)
         } else {
+            if fm.fileExists(atPath: newStore.path) { setAsideUnreadableStore(at: newStore) }
             copyImages(from: imagesDir, to: newImages)
             baseDir = target; imagesDir = newImages; storeURL = newStore
             saveNow()
@@ -919,26 +955,22 @@ final class ClipboardStore {
 
     private func startWatching() {
         stopWatching()
-        let fd = open(storeURL.path, O_EVTONLY)
-        guard fd >= 0 else { return }
-        let src = DispatchSource.makeFileSystemObjectSource(
-            fileDescriptor: fd, eventMask: [.write, .rename, .delete], queue: .main)
-        src.setEventHandler { [weak self] in
-            guard let self else { return }
-            if Date() < self.ignoreWatchUntil { return }
-            if let data = try? Data(contentsOf: self.storeURL),
-               let snap = try? JSONDecoder().decode(Snapshot.self, from: data) {
-                self.mergeExternal(snap)
+        let watcher = FileChangeWatcher(url: storeURL) { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                // Our own save; the watcher has already re-armed itself.
+                if Date() < self.ignoreWatchUntil { return }
+                if let snap = try? Self.readSnapshot(at: self.storeURL) {
+                    self.mergeExternal(snap)
+                }
             }
-            self.startWatching()
         }
-        src.setCancelHandler { close(fd) }
-        src.resume()
-        fileWatch = src
+        watcher.start()
+        fileWatcher = watcher
     }
 
     private func stopWatching() {
-        fileWatch?.cancel()
-        fileWatch = nil
+        fileWatcher?.stop()
+        fileWatcher = nil
     }
 }

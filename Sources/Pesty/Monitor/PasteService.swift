@@ -75,7 +75,9 @@ enum PasteService {
         case .image:
             break
         case .file:
-            let urls = item.fileURLs.compactMap { URL(string: $0) }
+            // A file clip only ever captures file URLs; anything else came
+            // from an edited or synced store.json and is not pasted as a URL.
+            let urls = item.fileURLs.compactMap { URL(string: $0) }.filter(\.isFileURL)
             if !urls.isEmpty { pasteboard.writeObjects(urls as [NSURL]) }
             if let t = item.text { pasteboard.setString(t, forType: .string) }
         case .color:
