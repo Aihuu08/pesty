@@ -23,7 +23,8 @@ enum HTMLSanitizer {
         clean(root)
         let body = root.elements(forName: "body").first ?? root
         let markup = (body.children ?? []).map { $0.xmlString }.joined()
-        return Data(("<html><body>" + markup + "</body></html>").utf8)
+        // Our own charset declaration: the original <meta> went with <head>.
+        return Data(("<html><head><meta charset=\"utf-8\"></head><body>" + markup + "</body></html>").utf8)
     }
 
     /// A doctype naming an external DTD, XML declarations and comments carry

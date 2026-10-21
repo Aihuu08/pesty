@@ -24,11 +24,9 @@ enum FormatConverter {
         // to reference a resource. The timeout bounds the document load.
         if let html = item.htmlData, withinLimit(html),
            let safe = HTMLSanitizer.sanitized(html),
-           let s = try? NSAttributedString(data: safe,
-                                           options: [.documentType: NSAttributedString.DocumentType.html,
-                                                     .characterEncoding: String.Encoding.utf8.rawValue,
-                                                     .timeout: 2.0],
-                                           documentAttributes: nil) {
+           let s = NSAttributedString(html: safe,
+                                      options: [.timeout: 2.0],
+                                      documentAttributes: nil) {
             return s
         }
         if let rtf = item.rtfData, withinLimit(rtf),

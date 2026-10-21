@@ -122,6 +122,12 @@ final class HTMLSanitizerTests: XCTestCase {
         XCTAssertTrue(out.contains("<td>c"), out)
     }
 
+    func testSanitizedChineseHTMLStillConverts() {
+        let item = ClipItem(type: .text, text: "粗体 链接",
+                            htmlData: Data("<meta charset='utf-8'><b>粗体</b> <a href=\"https://example.com\">链接</a>".utf8))
+        XCTAssertEqual(FormatConverter.markdown(for: item), "**粗体** [链接](https://example.com)")
+    }
+
     func testKeepsHarmlessInlineStyles() {
         let out = clean("<p><span style=\"font-weight:700\">heavy</span></p>")
         XCTAssertTrue(out.contains("font-weight:700"), out)
