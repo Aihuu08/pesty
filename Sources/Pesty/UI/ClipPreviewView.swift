@@ -52,7 +52,7 @@ struct ClipPreviewView: View {
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
                     .fill(Color(hex: item.colorHex ?? "#000000") ?? .black)
                     .frame(height: 180)
-                Text(item.colorHex ?? "Color")
+                Text(item.colorHex ?? String(localized: "Color"))
                     .font(.system(.title3, design: .monospaced))
                     .textSelection(.enabled)
             }
@@ -80,7 +80,7 @@ struct ClipPreviewView: View {
         }
     }
 
-    private func unavailable(_ message: String) -> some View {
+    private func unavailable(_ message: LocalizedStringKey) -> some View {
         ContentUnavailableView("Preview Unavailable",
                                systemImage: "eye.slash",
                                description: Text(message))

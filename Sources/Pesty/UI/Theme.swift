@@ -51,7 +51,7 @@ extension Date {
 
     var clipRelativeLong: String {
         let secs = -timeIntervalSinceNow
-        if secs < 8 { return "Just now" }
+        if secs < 8 { return String(localized: "Just now") }
         let f = RelativeDateTimeFormatter()
         f.unitsStyle = .full
         return f.localizedString(for: self, relativeTo: Date())

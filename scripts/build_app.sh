@@ -21,6 +21,18 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/Pesty"
 cp packaging/Pesty.icns "$APP/Contents/Resources/Pesty.icns"
 
+# SwiftUI's Text("…") and String(localized:) look the strings up in the main
+# bundle, so the catalog is compiled straight into Contents/Resources as
+# en.lproj and zh-Hans.lproj rather than into a SwiftPM resource bundle.
+echo "==> Compiling localizations"
+xcrun xcstringstool compile --output-directory "$APP/Contents/Resources" packaging/Localizable.xcstrings
+for lang in en zh-Hans; do
+  if [ ! -d "$APP/Contents/Resources/$lang.lproj" ]; then
+    echo "error: $lang.lproj was not produced from packaging/Localizable.xcstrings" >&2
+    exit 1
+  fi
+done
+
 sed -e "s/__VERSION__/$VERSION/" -e "s/__BUILD__/$BUILD/" \
     packaging/Info.plist > "$APP/Contents/Info.plist"
 
