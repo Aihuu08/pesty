@@ -133,3 +133,32 @@ final class HTMLSanitizerTests: XCTestCase {
         XCTAssertTrue(out.contains("font-weight:700"), out)
     }
 }
+
+/// Diagnostics for the CI log: does the system HTML importer work at all in
+/// this process, and with which options? Prints only; never fails.
+final class HTMLImporterDiagnosticsTests: XCTestCase {
+    func testPrintImporterBehavior() {
+        let samples: [(String, String)] = [
+            ("fragment", "<b>x</b>"),
+            ("doc", "<html><body><b>x</b></body></html>"),
+            ("doc+meta", "<html><head><meta charset=\"utf-8\"></head><body><b>粗</b></body></html>"),
+        ]
+        for (label, html) in samples {
+            let data = Data(html.utf8)
+            let plain = NSAttributedString(html: data, documentAttributes: nil)
+            let timed = NSAttributedString(html: data, options: [.timeout: 2.0], documentAttributes: nil)
+            var errorText = "none"
+            let viaData: NSAttributedString?
+            do {
+                viaData = try NSAttributedString(data: data,
+                                                 options: [.documentType: NSAttributedString.DocumentType.html,
+                                                           .characterEncoding: String.Encoding.utf8.rawValue],
+                                                 documentAttributes: nil)
+            } catch {
+                viaData = nil
+                errorText = "\(error)"
+            }
+            print("HTML-DIAG \(label) plain=\(plain?.string ?? "nil") timed=\(timed?.string ?? "nil") data=\(viaData?.string ?? "nil") error=\(errorText) main=\(Thread.isMainThread)")
+        }
+    }
+}
