@@ -58,6 +58,8 @@ final class ClipboardStore {
     private var imagesDir: URL
     private var baseDir: URL
     private var saveWorkItem: DispatchWorkItem?
+    @ObservationIgnored private let saveQueue = DispatchQueue(label: "com.greycorelabs.pesty.save", qos: .utility)
+    @ObservationIgnored private var pendingBackgroundSaves = 0
 
     private var fileWatcher: FileChangeWatcher?
     private var ignoreWatchUntil: Date = .distantPast
@@ -744,18 +746,53 @@ final class ClipboardStore {
 
     private func scheduleSave() {
         saveWorkItem?.cancel()
-        let work = DispatchWorkItem { [weak self] in self?.saveNow() }
+        let work = DispatchWorkItem { [weak self] in self?.saveInBackground() }
         saveWorkItem = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: work)
     }
 
-    func saveNow() {
+    /// Routine saves encode and write on `saveQueue`: a 5,000-clip history is
+    /// a 12 MB file whose encoding took ~0.3 s, long enough to stall the bar
+    /// after every copy when it ran on the main thread. The queue is serial,
+    /// so writes land in the order they were made. While any are in flight
+    /// the watcher ignores the file, since those changes are our own.
+    private func saveInBackground() {
         let snap = Snapshot(history: history, pinboards: pinboards)
-        guard let data = try? JSONEncoder().encode(snap) else { return }
-        ignoreWatchUntil = Date().addingTimeInterval(1.5)
-        try? data.write(to: storeURL, options: .atomic)
-        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: storeURL.path)
+        let url = storeURL
+        pendingBackgroundSaves += 1
+        ignoreWatchUntil = .distantFuture
+        saveQueue.async { [weak self] in
+            Self.write(snap, to: url)
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    self.pendingBackgroundSaves -= 1
+                    if self.pendingBackgroundSaves == 0 {
+                        self.ignoreWatchUntil = Date().addingTimeInterval(1.5)
+                    }
+                    NotificationCenter.default.post(name: .pestyStoreDidSave, object: nil)
+                }
+            }
+        }
+    }
+
+    /// Writes before returning, after any background save still in flight;
+    /// quitting and switching sync locations need the file on disk now.
+    func saveNow() {
+        saveWorkItem?.cancel()
+        saveWorkItem = nil
+        let snap = Snapshot(history: history, pinboards: pinboards)
+        let url = storeURL
+        ignoreWatchUntil = .distantFuture
+        saveQueue.sync { Self.write(snap, to: url) }
+        ignoreWatchUntil = pendingBackgroundSaves == 0 ? Date().addingTimeInterval(1.5) : .distantFuture
         NotificationCenter.default.post(name: .pestyStoreDidSave, object: nil)
+    }
+
+    nonisolated private static func write(_ snap: Snapshot, to url: URL) {
+        guard let data = try? JSONEncoder().encode(snap) else { return }
+        try? data.write(to: url, options: .atomic)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
     }
 
     // MARK: - Remote (CloudKit) apply
