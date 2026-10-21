@@ -36,6 +36,10 @@ final class HTMLImportNetworkTests: XCTestCase {
         </body></html>
         """
         let item = ClipItem(type: .text, text: "Bold and a link.", htmlData: Data(html.utf8))
+        // Bring WebKit up first: on a cold CI runner that alone can outlast
+        // FormatConverter's 2 s import timeout, and an import that timed out
+        // would make "no connections" prove nothing.
+        _ = NSAttributedString(html: Data("<b>warm-up</b>".utf8), documentAttributes: nil)
 
         let markdown = FormatConverter.markdown(for: item)
         print("HTML-MARKDOWN", markdown ?? "nil")
