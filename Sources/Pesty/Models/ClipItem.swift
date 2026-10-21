@@ -81,7 +81,19 @@ struct ClipItem: Identifiable, Codable, Equatable {
         }
     }
 
-    var searchableText: String {
+    /// What search looks at: title, content, source app, file locations and
+    /// color. Paths are percent-decoded so a Chinese file name matches as
+    /// typed. SearchIndex does the normalizing.
+    var searchSource: String {
+        [customTitle, text, sourceAppName,
+         fileURLs.map { $0.removingPercentEncoding ?? $0 }.joined(separator: " "), colorHex]
+            .compactMap { $0 }
+            .joined(separator: " ")
+    }
+
+    /// The pre-index search text, kept only as the baseline the search
+    /// benchmark compares against.
+    var legacySearchableText: String {
         [customTitle, text, sourceAppName, fileURLs.joined(separator: " "), colorHex]
             .compactMap { $0 }
             .joined(separator: " ")

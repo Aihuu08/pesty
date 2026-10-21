@@ -62,6 +62,12 @@ final class ClipboardStore {
     private var fileWatch: DispatchSourceFileSystemObject?
     private var ignoreWatchUntil: Date = .distantPast
 
+    /// Normalized search text per clip, built off the main thread after
+    /// launch and lazily for anything newer, so a keystroke never
+    /// re-transforms the whole history.
+    @ObservationIgnored private var searchIndexes: [UUID: CachedSearchIndex] = [:]
+    @ObservationIgnored private var searchWarmup: Task<Void, Never>?
+
     static var localBase: URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Pesty", isDirectory: true)
@@ -93,6 +99,7 @@ final class ClipboardStore {
         prepareDirectories()
         load()
         if Settings.shared.iCloudSync { startWatching() }
+        warmSearchIndexes()
     }
 
     private func prepareDirectories() {
@@ -110,9 +117,46 @@ final class ClipboardStore {
         case .pinboard(let id):
             base = pinboards.first(where: { $0.id == id })?.items ?? []
         }
-        let q = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !q.isEmpty else { return base }
-        return base.filter { $0.searchableText.contains(q) }
+        guard let query = SearchQuery(searchText) else { return base }
+        return base.filter { searchIndex(for: $0).matches(query) }
+    }
+
+    private func searchIndex(for item: ClipItem) -> SearchIndex {
+        let signature = ClipSearchSignature(item)
+        if let cached = searchIndexes[item.id], cached.signature == signature { return cached.index }
+        let index = SearchIndex(text: item.searchSource)
+        searchIndexes[item.id] = CachedSearchIndex(signature: signature, index: index)
+        return index
+    }
+
+    /// Builds the indexes that are missing or stale on a background task and
+    /// drops the ones whose clips are gone. Cheap when everything is current.
+    private func warmSearchIndexes() {
+        let items = history + pinboards.flatMap(\.items)
+        let live = Set(items.map(\.id))
+        searchIndexes = searchIndexes.filter { live.contains($0.key) }
+        let work = items.compactMap { item -> (UUID, ClipSearchSignature, String)? in
+            let signature = ClipSearchSignature(item)
+            if searchIndexes[item.id]?.signature == signature { return nil }
+            return (item.id, signature, item.searchSource)
+        }
+        guard !work.isEmpty else { return }
+        searchWarmup?.cancel()
+        searchWarmup = Task.detached(priority: .utility) { [weak self] in
+            var built: [(UUID, CachedSearchIndex)] = []
+            built.reserveCapacity(work.count)
+            for (id, signature, text) in work {
+                if Task.isCancelled { return }
+                built.append((id, CachedSearchIndex(signature: signature, index: SearchIndex(text: text))))
+            }
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                // A lookup may have indexed a clip meanwhile; keep the newer entry.
+                for (id, entry) in built where self.searchIndexes[id] == nil {
+                    self.searchIndexes[id] = entry
+                }
+            }
+        }
     }
 
     var selectedItem: ClipItem? {
@@ -482,6 +526,7 @@ final class ClipboardStore {
         }
 
         guard changed else { return false }
+        searchIndexes[item.id] = nil
         retentionPrunedRecordNames.remove(item.id.uuidString)
         if selectedItem == nil { selectFirst() }
         reconcileMultiSelection()
@@ -589,6 +634,7 @@ final class ClipboardStore {
 
     func prepareForBarPresentation() {
         applyRetentionPolicy()
+        warmSearchIndexes()
         clearMultiSelection()
         barPresentationToken &+= 1
         selectFirst()
@@ -685,6 +731,7 @@ final class ClipboardStore {
         guard !clips.isEmpty else { return }
         for entry in clips {
             let item = entry.0
+            searchIndexes[item.id] = nil
             // The per-app exclusion list is local to each Mac and is not synced, so a
             // clip from an ignored app copied on another device would otherwise arrive
             // here and land in history anyway. A privacy filter that leaks across
@@ -839,6 +886,10 @@ final class ClipboardStore {
     }
 
     private func mergeExternal(_ snap: Snapshot) {
+        // Another Mac's copy of a clip can share an id with different
+        // content, so start the index over; the warm-up rebuilds it.
+        searchIndexes.removeAll()
+        defer { warmSearchIndexes() }
         let before = history.count
         var combined = (history + snap.history).sorted { $0.createdAt > $1.createdAt }
         var seen = Set<String>()

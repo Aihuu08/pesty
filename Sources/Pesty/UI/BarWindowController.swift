@@ -244,6 +244,10 @@ final class BarWindowController: NSWindowController, NSWindowDelegate {
         searchBridge.focusAtEnd()
     }
 
+    var searchHasMarkedText: Bool {
+        searchBridge.hasMarkedText
+    }
+
     func resignSearch() {
         searchBridge.resign()
     }

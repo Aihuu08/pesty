@@ -13,6 +13,7 @@ struct ClipCardView: View {
     @State private var fileInfo: ClipPreviewProvider.FileInfo?
     private var store: ClipboardStore { ClipboardStore.shared }
     private var settings: Settings { Settings.shared }
+    private static let previewCharacterLimit = 1_500
     private var headerColor: Color { SourceColor.color(for: item.sourceBundleID) }
 
     var body: some View {
@@ -144,7 +145,9 @@ struct ClipCardView: View {
             }
             .frame(maxWidth: .infinity)
         default:
-            Text(item.text ?? "")
+            // Ten lines never need more than this; laying out a pasted book
+            // just to truncate it would stall the strip.
+            Text(item.text.map { String($0.prefix(Self.previewCharacterLimit)) } ?? "")
                 .font(.system(size: 12.5))
                 .foregroundStyle(Theme.cardTextPrimary.opacity(0.9))
                 .lineLimit(10)

@@ -599,6 +599,10 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         if handleBarCommandShortcut(event) { return nil }
 
+        // While an input method is composing in the search field, every key
+        // (digits that pick a candidate included) belongs to it.
+        if barController?.searchHasMarkedText == true { return event }
+
         let code = Int(event.keyCode)
         let flags = event.modifierFlags
         let cmd = flags.contains(.command)
@@ -694,6 +698,16 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 // to the newly focused native field editor — no character is
                 // lost transferring focus mid-keystroke.
                 return event
+            }
+            // Typing straight into the query bypasses the input method, so
+            // with one active (Pinyin and the like) the key would land as a
+            // bare Latin letter. Drop it instead and try the field again:
+            // the next keystroke then composes normally.
+            if InputSourceKind.current == .inputMethod {
+                DispatchQueue.main.async { [weak self] in
+                    _ = self?.barController?.focusSearchAtEnd()
+                }
+                return nil
             }
             if let chars = fallbackSearchCharacters(from: event) {
                 store.searchText.append(chars)

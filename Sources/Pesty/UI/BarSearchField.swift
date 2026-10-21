@@ -23,8 +23,20 @@ final class BarSearchFieldBridge {
               window.makeFirstResponder(field) else { return false }
         if let editor = field.currentEditor() as? NSTextView {
             editor.setSelectedRange(NSRange(location: editor.string.utf16.count, length: 0))
+            // The key monitor hands the triggering keystroke straight to this
+            // editor. Activate its input context first so an input method
+            // (Pinyin and the like) starts composing with that very key
+            // instead of the key landing as a bare Latin letter.
+            editor.inputContext?.activate()
         }
         return true
+    }
+
+    /// True while an input method is composing in the field: the underlined
+    /// text before a candidate is chosen. Keys then belong to the input method.
+    var hasMarkedText: Bool {
+        guard let editor = field?.currentEditor() as? NSTextView else { return false }
+        return editor.hasMarkedText()
     }
 
     func resign() {
