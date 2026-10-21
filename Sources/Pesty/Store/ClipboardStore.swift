@@ -926,7 +926,6 @@ final class ClipboardStore {
         // content, so start the index over; the warm-up rebuilds it.
         searchIndexes.removeAll()
         defer { warmSearchIndexes() }
-        let before = history.count
         var combined = (history + snap.history).sorted { $0.createdAt > $1.createdAt }
         var seen = Set<String>()
         var merged: [ClipItem] = []
@@ -950,7 +949,25 @@ final class ClipboardStore {
 
         combined.removeAll()
         selectFirst()
-        if history.count != before || !snap.history.isEmpty { saveNow() }
+        // Write back only when the merge holds something the file does not.
+        // Saving after every merge made two Macs answer each other's saves
+        // forever, which went unnoticed while the watcher went deaf after the
+        // first save; with the watcher fixed it would loop.
+        if mergedContents(history, pinboards) != mergedContents(snap.history, snap.pinboards) {
+            saveNow()
+        }
+    }
+
+    private struct MergedContents: Equatable {
+        let history: Set<String>
+        let pinboards: [UUID: Set<String>]
+    }
+
+    private func mergedContents(_ history: [ClipItem], _ pinboards: [Pinboard]) -> MergedContents {
+        MergedContents(
+            history: Set(history.map(contentKey)),
+            pinboards: Dictionary(pinboards.map { ($0.id, Set($0.items.map(contentKey))) },
+                                  uniquingKeysWith: { a, b in a.union(b) }))
     }
 
     private func startWatching() {

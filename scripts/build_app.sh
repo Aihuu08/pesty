@@ -41,9 +41,27 @@ printf 'APPL????' > "$APP/Contents/PkgInfo"
 # Explicitly sign the assembled bundle with a stable designated requirement.
 # Without this, each release build only carries Swift's per-binary linker
 # signature (a changing CDHash), which makes macOS ask for Accessibility again.
-echo "==> Signing $APP"
-/usr/bin/codesign --force --sign - --identifier com.greycorelabs.pesty \
-  -r='designated => identifier "com.greycorelabs.pesty"' "$APP"
+#
+# SIGN_IDENTITY names a code-signing certificate in your login keychain (a
+# self-signed one is enough, see docs/selfuse/HANDOFF.md). The requirement then
+# also pins that certificate, so another program cannot satisfy it, and inherit
+# Pesty's Accessibility grant, just by reusing the bundle identifier. Without it
+# the bundle is signed ad hoc, which pins the identifier only.
+if [ -n "${SIGN_IDENTITY:-}" ]; then
+  CERT_SHA1="$(security find-certificate -c "$SIGN_IDENTITY" -Z 2>/dev/null \
+    | awk '/SHA-1 hash:/ { print $3; exit }')"
+  if [ -z "$CERT_SHA1" ]; then
+    echo "error: no certificate named \"$SIGN_IDENTITY\" in the keychain" >&2
+    exit 1
+  fi
+  echo "==> Signing $APP with \"$SIGN_IDENTITY\" ($CERT_SHA1)"
+  /usr/bin/codesign --force --sign "$CERT_SHA1" --identifier com.greycorelabs.pesty \
+    -r="designated => identifier \"com.greycorelabs.pesty\" and certificate leaf = H\"$CERT_SHA1\"" "$APP"
+else
+  echo "==> Signing $APP ad hoc (set SIGN_IDENTITY to pin a certificate)"
+  /usr/bin/codesign --force --sign - --identifier com.greycorelabs.pesty \
+    -r='designated => identifier "com.greycorelabs.pesty"' "$APP"
+fi
 
 echo "==> Built $APP"
 /usr/bin/file "$APP/Contents/MacOS/Pesty"
