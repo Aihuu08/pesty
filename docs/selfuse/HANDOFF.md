@@ -30,7 +30,9 @@
 | 2 | `4e8a200` | 搜索：拼音全拼和首字母、简繁互搜、全半角/大小写/变音折叠，每个片段预先建索引；修复输入法问题（首字符触发聚焦的路径、fallback 路径、组字时的数字键） |
 | 2 | `1db9a75` | 简体中文界面：`packaging/Localizable.xcstrings`（193 条），`build_app.sh` 编译进 `.app`，Info.plist 声明 en 和 zh-Hans |
 | 3 | `1c39ac7` | iCloud Drive 监听每次事件后重新挂载；图片文件名只允许纯文件名（修复路径穿越）；store.json 读不出来时先另存一份，不再被覆盖；粘贴文件类片段只接受 file URL；拖拽链接只允许 http(s) |
-| 3 | （本文档所在提交） | `build_app.sh` 支持 `SIGN_IDENTITY` 自签证书签名；`scripts/dev/measure_idle.sh`；本交接文档 |
+| 3 | `a529b78` | 修复 iCloud Drive 两台 Mac 互相保存的无限循环（监听修好后会暴露出来）；`build_app.sh` 支持 `SIGN_IDENTITY` 自签证书签名；`scripts/dev/measure_idle.sh`；本交接文档 |
+| 3 | `79056c0`…`85b0ab0` | **HTML 转换会联网**（CI 证实，7 次连接）→ 新增 `HTMLSanitizer` 白名单清洗，现在为 0 次；顺带修复中文 HTML 乱码 |
+| 3 | `5815d63` | store.json 的日常保存挪到后台串行队列（5000 条时主线程原来要卡约 0.3 秒） |
 
 CI（GitHub 的 macOS 15 + Xcode 26.3）的结果见第 6 节。
 
@@ -38,6 +40,7 @@ CI（GitHub 的 macOS 15 + Xcode 26.3）的结果见第 6 节。
 - `Sources/Pesty/Search/SearchIndex.swift`、`ClipSearch.swift`：搜索索引，只用 Foundation 和系统 ICU 变换
 - `Sources/Pesty/Util/InputSourceKind.swift`：判断当前是输入法还是纯键盘布局
 - `Sources/Pesty/Store/FileChangeWatcher.swift`、`StoredFileName.swift`：监听修复、文件名校验
+- `Sources/Pesty/Util/HTMLSanitizer.swift`：HTML 白名单清洗，防止转换时联网
 - `packaging/Localizable.xcstrings`：字符串目录，是唯一的翻译来源
 - `scripts/dev/extract_l10n_keys.py --check`：检查源码里的字符串是否都在目录中，并且都有中文
 - `Tests/PestyTests/*`：新增 30 多个测试，包括搜索和保存的基准测试
@@ -170,12 +173,13 @@ open /Applications/Pesty.app
 
 ---
 
-## 4. 如果 HTML 导入会联网（审查报告 B 项）
-CI 里有一个测试 `HTMLImportNetworkTests`：它在 127.0.0.1 上开一个监听端口，再把引用这个地址的 HTML 交给 `FormatConverter`，看有没有连接进来。这个监听只在测试代码里，不在 App 里。
-- 测试**通过**：HTML 导入不会去加载远程资源。请把审查报告 B 项改成「已验证（CI 与本机）：不联网」。
-- 测试**失败**：在 `FormatConverter.attributed(for:)` 里导入 HTML 之前，先去掉 `<img>`、`<link>`、`<script>`、`<iframe>`、`<object>`、`<embed>` 标签，`<style>` 块里的 `@import`，以及所有 `url(...)`；或者干脆只用 RTF。改完后测试应该通过。这算安全修复，不算新功能，但还是要告诉用户。
-
----
+## 4. HTML 导入联网（审查报告 B 项）：已在 CI 证实并修复
+- 测试 `HTMLImportNetworkTests` 在 127.0.0.1 上开一个监听端口（只存在于测试代码，不在 App 里），把引用这个地址的 HTML 交给 `FormatConverter` 处理。
+- **修复前**：一次「粘贴为 Markdown」加一次「清除格式后粘贴」，测试收到了 **7 次连接**。也就是说，网页里的图片、样式表、iframe 都会被系统的 HTML 导入器（WebKit）真的请求出去，包括追踪像素。
+- **修复**：新增 `Sources/Pesty/Util/HTMLSanitizer.swift`。先解析 HTML（禁止加载外部实体），再按白名单重建：保留文字和格式标签；删掉 img、link、script、style、iframe、video、svg、form 等元素及其内容；只保留不会带 URL 的属性；内联 `style` 里出现 `url(` 之类写法就整条删掉。
+- **修复后**：同样的测试，HTML 里塞了 20 多种加载方式，连接数为 **0**，粗体和链接照常转换。
+- 修复过程中顺带发现并修复了一个中文问题：清洗时如果直接把原始字节交给解析器，中文会变成乱码（“粗体”变成“ç²—ä½“”）。现在先解码成字符串再解析，有测试 `testSanitizedChineseHTMLStillConverts` 覆盖。
+- 第 8 步里的 nettop 实测仍然要做，作为本机的最终确认。
 
 ## 5. 已知限制和遗留问题
 - **多音字**：每个汉字只取默认读音（重庆 → zhongqing，银行 → yinxing）。要支持多音字需要自带词典，这违反「不加依赖」，所以没做。
@@ -185,16 +189,18 @@ CI 里有一个测试 `HTMLImportNetworkTests`：它在 127.0.0.1 上开一个�
 - `Theme.swift` 里的 `clipRelative` 没有任何地方用到，是死代码。按规则没有删，要删先问用户。
 - 第一次搜索前，后台需要先建好索引（5000 条在 CI 的 debug 构建上约 0.5 秒）。在这之前搜索也能用，只是会在主线程上按需逐条建索引。
 - iCloud Drive 同步：删除会复活，排除的 App 规则在合并时也不生效（报告 D 项），等第 2 节步骤 9 的决定。
-- 每次捕获都会重写整个 store.json。目前的 CI 数据见第 6 节；如果本机数据显示主线程耗时明显（超过 15ms），可以把 `saveNow` 的编码和写入挪到后台串行队列，格式不变。动手前先给用户看数据。
+- 每次捕获仍然会重写整个 store.json（已挪到后台，不再卡界面），写入量见第 6 节备注。
 
-## 6. CI 数据（GitHub macOS 15 runner，debug 构建，仅供参考；以本机为准）
-| 项目 | 旧 | 新 |
+## 6. CI 数据（GitHub macOS 15 runner，debug 构建，多次运行取典型值；以本机为准）
+| 项目 | 改动前 | 改动后 |
 |---|---|---|
-| 5000 条历史，每次按键过滤 | 167.5 ms | 5.8 ms |
-| 5000 条建索引（后台，一次性） | — | 546 ms |
-| store.json 保存（5000 条，含富文本） | 见下方 SAVE-BENCH | — |
+| 5000 条历史，每次按键过滤 | 约 155–168 ms | 约 5–8 ms |
+| 5000 条建搜索索引（后台线程，一次性） | — | 约 400–600 ms |
+| 保存 store.json（5000 条，含富文本，约 11.9 MB） | 编码约 280–400 ms，**在主线程**，每次复制后都会卡一下 | 同样的耗时挪到后台串行队列，主线程不再等待；文件格式不变 |
+| 读取 store.json（启动时） | 解码约 70–90 ms | 不变 |
+| HTML 转换时的外部连接 | 7 次 | 0 次 |
 
-SAVE-BENCH 和 HTML-IMPORT-NETWORK 的结果由最新一次 CI 填入，见第 7 节。
+备注：每次复制都要重写约 12 MB 的文件（如果历史有 5000 条）。按每天复制 100 次算，大约每天写入 1.2 GB。要彻底解决需要换成增量存储，那会改变数据格式，没有做。默认的历史上限是 500 条，按比例约 1.2 MB。
 
 ## 7. 最新 CI 结果
-（这一节在推送时更新）
+截至本文档最后一次提交，`claude/sweet-thompson-fycdit` 分支在 CI 上的结果：编译通过、全部测试通过、`build_app.sh` 打包通过（包括本地化编译和 en/zh-Hans 两个 lproj 目录的检查）。查看方法：fork 页面的 **Actions** 标签页。
