@@ -19,12 +19,16 @@ enum FormatConverter {
     }
 
     private static func attributed(for item: ClipItem) -> NSAttributedString? {
-        // The importer loads no subresources, so the HTML goes in as captured;
-        // the timeout only bounds the document load itself.
+        // The importer is WebKit and fetches whatever the document references,
+        // so the HTML goes in only after HTMLSanitizer has removed every way
+        // to reference a resource. The timeout bounds the document load.
         if let html = item.htmlData, withinLimit(html),
-           let s = NSAttributedString(html: html,
-                                      options: [.timeout: 2.0],
-                                      documentAttributes: nil) {
+           let safe = HTMLSanitizer.sanitized(html),
+           let s = try? NSAttributedString(data: safe,
+                                           options: [.documentType: NSAttributedString.DocumentType.html,
+                                                     .characterEncoding: String.Encoding.utf8.rawValue,
+                                                     .timeout: 2.0],
+                                           documentAttributes: nil) {
             return s
         }
         if let rtf = item.rtfData, withinLimit(rtf),
