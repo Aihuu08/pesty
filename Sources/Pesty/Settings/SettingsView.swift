@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import Combine
 
 struct SettingsView: View {
     var body: some View {
@@ -354,38 +355,42 @@ private struct HistoryRetentionSettings: View {
         } footer: {
             // A grouped Form lays Section body rows out on a shared label/control
             // grid that clamps a bare Slider; the footer is plain full-width content.
-            if draftMode != .itemCount {
-                VStack(alignment: .leading, spacing: 9) {
-                    HStack {
-                        Text("Remove clips older than")
-                        Spacer()
-                        Text(sliderPreset.title)
-                            .fontWeight(.semibold)
-                            .foregroundStyle(Color.accentColor)
-                    }
-                    Slider(value: $sliderValue,
-                           in: 0...Double(HistoryRetentionPreset.allCases.count - 1),
-                           step: 1,
-                           onEditingChanged: { editing in
-                               sliderEditing = editing
-                               if !editing { applySliderValue() }
-                           })
-                    HStack(spacing: 0) {
-                        ForEach(HistoryRetentionPreset.allCases) { preset in
-                            Text(preset.shortTitle)
-                                .font(.system(size: 10, weight: preset == sliderPreset ? .bold : .medium))
-                                .foregroundStyle(preset == sliderPreset ? Color.accentColor : .secondary)
-                                .frame(maxWidth: .infinity)
+            // Stack it explicitly: left to itself the footer puts its children side
+            // by side, which squeezes the storage summary onto two lines.
+            VStack(alignment: .leading, spacing: 8) {
+                if draftMode != .itemCount {
+                    VStack(alignment: .leading, spacing: 9) {
+                        HStack {
+                            Text("Remove clips older than")
+                            Spacer()
+                            Text(sliderPreset.title)
+                                .fontWeight(.semibold)
+                                .foregroundStyle(Color.accentColor)
+                        }
+                        Slider(value: $sliderValue,
+                               in: 0...Double(HistoryRetentionPreset.allCases.count - 1),
+                               step: 1,
+                               onEditingChanged: { editing in
+                                   sliderEditing = editing
+                                   if !editing { applySliderValue() }
+                               })
+                        HStack(spacing: 0) {
+                            ForEach(HistoryRetentionPreset.allCases) { preset in
+                                Text(preset.shortTitle)
+                                    .font(.system(size: 10, weight: preset == sliderPreset ? .bold : .medium))
+                                    .foregroundStyle(preset == sliderPreset ? Color.accentColor : .secondary)
+                                    .frame(maxWidth: .infinity)
+                            }
                         }
                     }
+                    .padding(.vertical, 2)
                 }
-                .padding(.vertical, 2)
+                Text(footnote)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.top, draftMode == .itemCount ? 0 : 4)
+                LabeledContent("History and pinboards on disk", value: storageSummary)
             }
-            Text(footnote)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .padding(.top, draftMode == .itemCount ? 0 : 4)
-            LabeledContent("History and pinboards on disk", value: storageSummary)
         }
         .task {
             await refreshStorageSize()
